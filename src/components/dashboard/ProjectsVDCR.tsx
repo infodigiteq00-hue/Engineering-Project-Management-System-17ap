@@ -3287,7 +3287,7 @@ const handleCreateRevisionEvent = async () => {
 
       // Helper function to normalize Code Status - extracts code number from various formats
       const normalizeCodeStatus = (codeStatusInput: string | number | undefined): number => {
-        if (!codeStatusInput) return 3; // Default to Code 3
+        if (!codeStatusInput) return 3;
         const codeStatusStr = String(codeStatusInput).trim();
         
         // Handle common patterns:
@@ -3315,7 +3315,7 @@ const handleCreateRevisionEvent = async () => {
           return Math.max(1, Math.min(4, codeNum));
         }
         
-        return 3; // Default to Code 3 if no number found
+        return 3;
       };
 
       // Helper function to format Code Status as "Code 1", "Code 2", etc.
@@ -3464,9 +3464,9 @@ const handleCreateRevisionEvent = async () => {
             return formatRevision(normalizedRev);
           })(),
           code_status: (() => {
-            const codeStatusInput = row['Code Status']?.trim();
+            const codeStatusInput = String(row['Code Status'] ?? '').trim();
             if (!codeStatusInput) {
-              return 'Code 3'; // Default if empty
+              return ''; // Keep blank when code is not provided
             }
             // Normalize and format the code status
             const normalizedCode = normalizeCodeStatus(codeStatusInput);

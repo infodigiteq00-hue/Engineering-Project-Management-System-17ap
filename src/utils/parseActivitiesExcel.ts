@@ -30,13 +30,13 @@ function parseTargetRelativeToDays(text: string): number | null {
   if (!text || typeof text !== 'string') return null;
   const t = text.trim().toLowerCase();
   // "1st day" = 0, "2nd day" = 1, "3rd day" = 2
-  const dayMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*day$/);
+  const dayMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*days?$/);
   if (dayMatch) return Math.max(0, parseInt(dayMatch[1], 10) - 1);
   // "1st week" = 7, "2nd week" = 14, "3rd week" = 21
-  const weekMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*week$/);
+  const weekMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*weeks?$/);
   if (weekMatch) return Math.max(0, parseInt(weekMatch[1], 10)) * 7;
   // "1st month" = 30, "2nd month" = 60
-  const monthMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*month$/);
+  const monthMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*months?$/);
   if (monthMatch) return Math.max(0, parseInt(monthMatch[1], 10)) * 30;
   // Plain number = days
   const num = parseInt(t, 10);
@@ -49,6 +49,12 @@ function addDays(isoDate: string, days: number): string {
   const d = new Date(y, m - 1, day);
   d.setDate(d.getDate() + days);
   return toISODateLocal(d);
+}
+
+function isoToDDMMYYYY(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-');
+  if (!y || !m || !d) return isoDate;
+  return `${d}-${m}-${y}`;
 }
 
 /** Format a Date as yyyy-mm-dd using local date parts (no timezone shift). */
@@ -68,8 +74,8 @@ function parseDateCell(val: unknown): string | null {
   if (typeof val === 'string') {
     const trimmed = val.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-    // dd-mm-yyyy or d-m-yyyy (strict: day-month-year)
-    const ddmmyyyy = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    // dd-mm-yyyy, dd/mm/yyyy or dd mm yyyy (strict: day-month-year)
+    const ddmmyyyy = trimmed.match(/^(\d{1,2})[\s/-](\d{1,2})[\s/-](\d{4})$/);
     if (ddmmyyyy) {
       const day = parseInt(ddmmyyyy[1], 10);
       const month = parseInt(ddmmyyyy[2], 10) - 1;
@@ -77,14 +83,26 @@ function parseDateCell(val: unknown): string | null {
       const d = new Date(year, month, day);
       if (!isNaN(d.getTime()) && d.getDate() === day && d.getMonth() === month) return toISODateLocal(d);
     }
+    // Excel serial sometimes comes as a numeric-looking string (e.g. "46138").
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const serial = Number(trimmed);
+      if (!isNaN(serial) && serial >= 1 && serial <= 2958465) {
+        // Excel 1900 date system base: 1899-12-30 (accounts for Excel's leap-year bug).
+        const excelEpoch = new Date(1899, 11, 30);
+        const d = new Date(excelEpoch.getTime());
+        d.setDate(d.getDate() + Math.floor(serial));
+        if (!isNaN(d.getTime())) return toISODateLocal(d);
+      }
+    }
     const parsed = new Date(trimmed);
     if (!isNaN(parsed.getTime())) return toISODateLocal(parsed);
   }
-  // Excel serial: number of days since 1900-01-01 (Excel epoch)
+  // Excel serial in 1900 date system.
   if (typeof val === 'number' && !isNaN(val) && val >= 1 && val <= 2958465) {
-    const excelEpoch = new Date(1900, 0, 1);
+    // Excel 1900 date system base: 1899-12-30 (accounts for Excel's leap-year bug).
+    const excelEpoch = new Date(1899, 11, 30);
     const d = new Date(excelEpoch.getTime());
-    d.setDate(d.getDate() + (Math.floor(val) - 1));
+    d.setDate(d.getDate() + Math.floor(val));
     if (!isNaN(d.getTime())) return toISODateLocal(d);
   }
   if (val instanceof Date && !isNaN(val.getTime())) return toISODateLocal(val);
@@ -189,9 +207,12 @@ export function parseActivitiesExcel(rows: unknown[][]): ParsedActivitiesResult 
     if (!name) continue; // skip empty rows
     const sr_no = typeof srRaw === 'number' && !isNaN(srRaw) ? Math.max(1, Math.floor(srRaw)) : i - dataStart + 1;
     const activity_type = normalizeActivityType(typeRaw);
-    const target_relative = targetRaw != null ? String(targetRaw).trim() : '';
+    const rawTargetRelative = targetRaw != null ? String(targetRaw).trim() : '';
     // Prefer target column as explicit date (dd-mm-yyyy or Excel serial). Use as final target_date; do not recalculate from commencement.
     const parsedTargetDate = parseDateCell(targetRaw);
+    const target_relative = parsedTargetDate !== null
+      ? (typeof targetRaw === 'number' ? isoToDDMMYYYY(parsedTargetDate) : (rawTargetRelative || parsedTargetDate))
+      : rawTargetRelative;
     const target_date = parsedTargetDate !== null
       ? parsedTargetDate
       : (commencement_date && target_relative ? (() => {

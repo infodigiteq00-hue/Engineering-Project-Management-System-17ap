@@ -933,7 +933,37 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       if (!dateString || dateString === '—' || dateString.trim() === '') {
         return '—';
       }
-      const date = new Date(dateString);
+      const trimmed = String(dateString).trim();
+      // Keep date-only values timezone-safe (avoid +1/-1 day shifts in UI).
+      const isoLike = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+      if (isoLike) {
+        const y = Number(isoLike[1]);
+        const m = Number(isoLike[2]) - 1;
+        const d = Number(isoLike[3]);
+        const localDate = new Date(y, m, d);
+        if (!isNaN(localDate.getTime())) {
+          return localDate.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          });
+        }
+      }
+      const dmyLike = trimmed.match(/^(\d{1,2})[\s/-](\d{1,2})[\s/-](\d{4})$/);
+      if (dmyLike) {
+        const d = Number(dmyLike[1]);
+        const m = Number(dmyLike[2]) - 1;
+        const y = Number(dmyLike[3]);
+        const localDate = new Date(y, m, d);
+        if (!isNaN(localDate.getTime()) && localDate.getDate() === d && localDate.getMonth() === m) {
+          return localDate.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          });
+        }
+      }
+      const date = new Date(trimmed);
       if (isNaN(date.getTime())) {
         return dateString; // Return original if invalid
       }
@@ -3702,13 +3732,14 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const year = d.getFullYear();
       const todayDDMMYYYY = `${day}-${month}-${year}`;
+      const directDateSample = `${day} ${month} ${year}`;
       const rows = [
         ['Commencement Date', todayDDMMYYYY],
         ['Sr. No.', 'Activity Name', 'Activity Type', 'Target', 'Inspection/TPI involved?', 'Weightage (%)'],
-        [1, 'Shell welding', 'Minor', '1st week', 'No', 25],
-        [2, 'Nozzle marking', 'Minor', '2nd week', 'No', 25],
-        [3, 'Shell fabrication complete', 'Major', '3rd week', 'Yes', 25],
-        [4, 'Radiography tests', 'Major', '1st month', 'Yes', 25],
+        [1, 'Shell welding', 'Minor', '1st day', 'No', 25],
+        [2, 'Nozzle marking', 'Minor', '2nd day', 'No', 25],
+        [3, 'Shell fabrication complete', 'Major', '7th day', 'Yes', 25],
+        [4, 'Radiography tests', 'Major', directDateSample, 'Yes', 25],
       ];
       const ws = XLSX.utils.aoa_to_sheet(rows);
       const wb = XLSX.utils.book_new();
@@ -3721,12 +3752,12 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     }
   }, [toast]);
 
-  // Helper: parse string as explicit date (yyyy-mm-dd, dd-mm-yyyy, or dd/mm/yyyy). Returns yyyy-mm-dd or null. If it's a date, use as-is; if week/days/month, compute from commencement.
+  // Helper: parse string as explicit date (yyyy-mm-dd, dd-mm-yyyy, dd/mm/yyyy, or dd mm yyyy). Returns yyyy-mm-dd or null.
   const parseExplicitTargetDate = useCallback((val: string | undefined): string | null => {
     if (!val || typeof val !== 'string') return null;
     const t = val.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-    const ddmmyyyy = t.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    const ddmmyyyy = t.match(/^(\d{1,2})[\s/-](\d{1,2})[\s/-](\d{4})$/);
     if (ddmmyyyy) {
       const day = parseInt(ddmmyyyy[1], 10);
       const month = parseInt(ddmmyyyy[2], 10) - 1;
@@ -3747,13 +3778,13 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     if (!targetRelative?.trim()) return null;
     const t = targetRelative.trim().toLowerCase();
     let days: number | null = null;
-    const dayMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*day$/);
+    const dayMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*days?$/);
     if (dayMatch) days = Math.max(0, parseInt(dayMatch[1], 10) - 1);
     else {
-      const weekMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*week$/);
+      const weekMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*weeks?$/);
       if (weekMatch) days = Math.max(0, parseInt(weekMatch[1], 10)) * 7;
       else {
-        const monthMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*month$/);
+        const monthMatch = t.match(/^(\d+)(?:st|nd|rd|th)?\s*months?$/);
         if (monthMatch) days = Math.max(0, parseInt(monthMatch[1], 10)) * 30;
         else {
           const num = parseInt(t, 10);
@@ -3780,13 +3811,22 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
 
   const openEditActivitiesModal = useCallback((equipmentId: string) => {
     const list = equipmentActivities[equipmentId] || [];
+    const isoToDDMMYYYY = (isoDate: string): string => {
+      const [y, m, d] = String(isoDate || '').split('-');
+      if (!y || !m || !d) return isoDate;
+      return `${d}-${m}-${y}`;
+    };
     setEditActivitiesDraft(list.map((a: any, i: number) => ({
       id: a.id,
       sr_no: a.sr_no ?? i + 1,
       activity_name: a.activity_name || '',
       activity_type: a.activity_type === 'milestone' ? 'milestone' : 'regular_update',
       // Only target_relative is edited in the modal; keep target_date empty so save does not prefer a stale copy over the input field.
-      target_relative: a.target_relative || a.target_date || '',
+      target_relative: (() => {
+        const raw = String(a.target_relative || '').trim();
+        if (/^\d+$/.test(raw) && a.target_date) return isoToDDMMYYYY(String(a.target_date));
+        return raw || a.target_date || '';
+      })(),
       target_date: '',
       sort_order: a.sort_order ?? i,
       inspection_tpi_involved: a.inspection_tpi_involved ?? false,
@@ -10512,8 +10552,8 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                                     }}
                                   >
                                     {(equipmentActivities[item.id] && equipmentActivities[item.id].length)
-                                      ? 'Track QAP Status'
-                                      : 'Start QAP Tracking'}
+                                      ? 'Track Activities Status'
+                                      : 'Start Activities Tracking'}
                                   </Button>
                           </div>
                         </div>
@@ -12504,12 +12544,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                         ? activity.completion.completed_on
                         : (myTarget || activity.target_date || activity.target_relative);
                       const dateStr = rawDate && rawDate !== activity.target_relative
-                        ? (() => {
-                            try {
-                              const d = new Date(rawDate);
-                              return isNaN(d.getTime()) ? rawDate : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                            } catch { return rawDate; }
-                          })()
+                        ? formatDateOnly(String(rawDate))
                         : (rawDate || '—');
                       const effectiveTargetForVariance = activity.target_date || myTarget;
                       const daysVariance = activity.completion?.completed_on && effectiveTargetForVariance
@@ -12574,20 +12609,10 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                           })()
                         : null;
                       const targetDateStr = myTarget
-                        ? (() => {
-                            try {
-                              const d = new Date(myTarget);
-                              return isNaN(d.getTime()) ? myTarget : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                            } catch { return myTarget; }
-                          })()
+                        ? formatDateOnly(String(myTarget))
                         : (activity.target_relative || activity.target_date || '—');
                       const completedOnStr = activity.completion?.completed_on
-                        ? (() => {
-                            try {
-                              const d = new Date(activity.completion.completed_on);
-                              return isNaN(d.getTime()) ? activity.completion.completed_on : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                            } catch { return activity.completion.completed_on; }
-                          })()
+                        ? formatDateOnly(String(activity.completion.completed_on))
                         : null;
                       const isStepDetailsOpen = qapStepDetails?.equipmentId === qapPopupEquipmentId && qapStepDetails?.activityId === (activity.id || String(idx));
                       const isMilestone = activity.activity_type === 'milestone';
